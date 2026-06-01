@@ -8,8 +8,8 @@ import { ChatSession, Operator, SenderRole } from "./types";
 import { login } from "./api/auth";
 import { getMe, setStatus } from "./api/operators";
 import {
-  listMyChats, listClosed, listPending, getHistory,
-  acceptChat, rejectChat, closeChat, takeChat,
+  listMyChats, listClosed, getHistory,
+  acceptChat, rejectChat, closeChat,
   mapAssignedChat, formatTime, PAGE_SIZE
 } from "./api/chats";
 import { loadSenderTypeMap } from "./api/senderTypes";
@@ -30,16 +30,17 @@ export default function App() {
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loginLoading, setLoginLoading] = useState<boolean>(false);
 
-  // Данные. Один массив: reserved+active (живут по WS) + текущая страница pending + текущая страница closed.
+  // Данные. Один массив: reserved+active (живут по WS) + текущая страница closed.
   const [chats, setChats] = useState<ChatSession[]>([]);
   const [selectedChatId, setSelectedChatId] = useState<number | null>(null);
   const [currentOperator, setCurrentOperator] = useState<Operator | null>(null);
 
-  // Пагинация серверных списков
-  const [pendingPage, setPendingPage] = useState<number>(1);
-  const [pendingTotal, setPendingTotal] = useState<number>(0);
+  // Пагинация завершённых — серверная.
   const [closedPage, setClosedPage] = useState<number>(1);
   const [closedTotal, setClosedTotal] = useState<number>(0);
+  // Пагинация «Новые»/«В работе» — клиентская (списки грузятся целиком по WS).
+  const [reservedPage, setReservedPage] = useState<number>(1);
+  const [activePage, setActivePage] = useState<number>(1);
 
   // UI
   const [messageInput, setMessageInput] = useState<string>("");
@@ -81,18 +82,7 @@ export default function App() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
-  // --- Загрузка серверных страниц (pending/closed) ---
-  const loadPending = async (page: number, search: string) => {
-    try {
-      const res = await listPending(page, search);
-      setPendingPage(res.page);
-      setPendingTotal(res.total);
-      setChats((prev) => [...prev.filter((c) => c.status !== "pending"), ...res.items]);
-    } catch (err) {
-      console.error("Ошибка загрузки очереди:", err);
-    }
-  };
-
+  // --- Загрузка серверной страницы завершённых ---
   const loadClosed = async (page: number, search: string) => {
     try {
       const res = await listClosed(operatorIdRef.current, page, search);
@@ -125,11 +115,11 @@ export default function App() {
     if (withHistory.length > 0) {
       setSelectedChatId(withHistory[0].id);
     }
-    // Страницы pending/closed подтянет debounce-эффект при isLoggedIn=true.
+    // Страницу closed подтянет debounce-эффект при isLoggedIn=true.
     connectSocket();
   };
 
-  // Выбор чата: для завершённых/нераспределённых (и любых пустых) лениво подгружаем переписку.
+  // Выбор чата: для завершённых (и любых пустых) лениво подгружаем переписку.
   const selectChat = (chatId: number) => {
     setSelectedChatId(chatId);
     const chat = chats.find((c) => c.id === chatId);
@@ -161,16 +151,21 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Поиск по pending/closed — серверный, с debounce. Reserved/active фильтруются клиентски.
+  // Поиск по closed — серверный, с debounce. Reserved/active фильтруются клиентски.
   useEffect(() => {
     if (!isLoggedIn) return;
     const t = setTimeout(() => {
-      loadPending(1, searchQuery);
       loadClosed(1, searchQuery);
     }, 350);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchQuery, isLoggedIn]);
+
+  // Смена поискового запроса возвращает клиентские группы на первую страницу.
+  useEffect(() => {
+    setReservedPage(1);
+    setActivePage(1);
+  }, [searchQuery]);
 
   // --- WebSocket оператора ---
   const connectSocket = () => {
@@ -181,7 +176,7 @@ export default function App() {
     const socket = new OperatorSocket(token, {
       onStatusChange: setConnectionStatus,
       onChatAssigned: (chatId, client) => {
-        // upsert: заменяем возможный pending-элемент зарезервированным.
+        // upsert: добавляем зарезервированный чат (или заменяем дубликат).
         setChats((prev) => [
           mapAssignedChat(chatId, client, operatorIdRef.current),
           ...prev.filter((c) => c.id !== chatId),
@@ -223,9 +218,8 @@ export default function App() {
       withHistory.forEach((c) => loadedHistoryRef.current.add(c.id));
       setChats((prev) => [
         ...withHistory,
-        ...prev.filter((c) => c.status === "pending" || c.status === "closed"),
+        ...prev.filter((c) => c.status === "closed"),
       ]);
-      loadPending(pendingPage, searchQuery);
       loadClosed(closedPage, searchQuery);
     } catch (err) {
       console.error("Ошибка досинхронизации чатов:", err);
@@ -278,20 +272,6 @@ export default function App() {
   };
 
   // --- Действия с чатом ---
-  const handleTakeChat = async (chatId: number) => {
-    try {
-      await takeChat(chatId);
-      // Убираем из очереди; chat_assigned добавит чат в «Новые» (reserved).
-      setChats((prev) => prev.filter((c) => !(c.id === chatId && c.status === "pending")));
-      setPendingTotal((t) => Math.max(0, t - 1));
-    } catch (err) {
-      if (err instanceof ApiError) {
-        alert(err.status === 409 ? "Чат уже взят или вы не в сети (статус «Онлайн»)." : err.message);
-      }
-      console.error("Ошибка взятия чата:", err);
-    }
-  };
-
   const handleAcceptChat = async (chatId: number) => {
     try {
       await acceptChat(chatId);
@@ -346,16 +326,29 @@ export default function App() {
   const matchesClient = (c: ChatSession) =>
     c.customerName.toLowerCase().includes(query) || String(c.id).includes(searchQuery);
 
-  // reserved/active — клиентский фильтр; pending/closed уже отфильтрованы сервером.
+  // reserved/active — клиентский фильтр; closed уже отфильтрован сервером.
   const reservedChats = chats.filter((c) => c.status === "reserved" && matchesClient(c));
   const activeChats = chats.filter((c) => c.status === "active" && matchesClient(c));
-  const pendingChats = chats.filter((c) => c.status === "pending");
   const closedChats = chats.filter((c) => c.status === "closed");
   const totalCount = chats.length;
   const currentChat = chats.find((c) => c.id === selectedChatId);
 
-  const pendingPages = Math.max(1, Math.ceil(pendingTotal / PAGE_SIZE));
+  // Число страниц и срез текущей страницы для клиентских групп.
+  const reservedPages = Math.max(1, Math.ceil(reservedChats.length / PAGE_SIZE));
+  const activePages = Math.max(1, Math.ceil(activeChats.length / PAGE_SIZE));
   const closedPages = Math.max(1, Math.ceil(closedTotal / PAGE_SIZE));
+  const reservedPageItems = reservedChats.slice(
+    (reservedPage - 1) * PAGE_SIZE, reservedPage * PAGE_SIZE
+  );
+  const activePageItems = activeChats.slice((activePage - 1) * PAGE_SIZE, activePage * PAGE_SIZE);
+
+  // Если список сократился (чат принят/закрыт) и текущая страница вышла за предел — зажимаем.
+  useEffect(() => {
+    if (reservedPage > reservedPages) setReservedPage(reservedPages);
+  }, [reservedPage, reservedPages]);
+  useEffect(() => {
+    if (activePage > activePages) setActivePage(activePages);
+  }, [activePage, activePages]);
 
   // Пагинатор
   const renderPager = (page: number, pages: number, onPage: (p: number) => void) => {
@@ -382,7 +375,7 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#F9FAFB] font-sans text-gray-900 flex flex-col antialiased">
+    <div className="h-screen overflow-hidden bg-[#F9FAFB] font-sans text-gray-900 flex flex-col antialiased">
 
       {!isLoggedIn ? (
         // Экран входа
@@ -578,60 +571,58 @@ export default function App() {
               <div className="flex-1 overflow-y-auto divide-y divide-gray-50 bg-white">
 
                 {/* Новые: reserved */}
-                <div className="p-4">
-                  <h2 className="text-xs font-bold uppercase tracking-widest text-gray-400 mb-3 flex items-center gap-2 font-sans">
+                <div className="p-3">
+                  <h2 className="text-[11px] font-bold uppercase tracking-widest text-gray-400 mb-2 flex items-center gap-2 font-sans">
                     <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
                     Новые ({reservedChats.length})
                   </h2>
 
                   {reservedChats.length === 0 ? (
-                    <div className="p-4 text-center rounded-xl bg-gray-50 text-xs text-gray-400 border border-dashed border-gray-200 font-sans">
+                    <div className="p-2.5 text-center rounded-lg bg-gray-50 text-[11px] text-gray-400 border border-dashed border-gray-200 font-sans">
                       Нет новых обращений
                     </div>
                   ) : (
-                    <div className="space-y-3">
-                      {reservedChats.map((chat) => {
+                    <div className="space-y-1.5">
+                      {reservedPageItems.map((chat) => {
                         const last = chat.messages[chat.messages.length - 1];
                         return (
                           <div
                             id={`chat-reserved-item-${chat.id}`}
                             key={chat.id}
                             onClick={() => selectChat(chat.id)}
-                            className={`p-3 bg-amber-50 border border-amber-200 rounded-xl cursor-pointer shadow-sm relative transition-all duration-200 ${
+                            className={`p-2 bg-amber-50 border border-amber-200 rounded-lg cursor-pointer shadow-sm relative transition-all duration-200 ${
                               selectedChatId === chat.id ? "ring-2 ring-amber-500 border-transparent shadow-md" : "pulsate-reserved-chat"
                             }`}
                           >
-                            <div className="flex justify-between items-start mb-1 overflow-hidden">
-                              <span className="font-bold text-sm text-gray-900 truncate pr-2 font-sans">{chat.customerName}</span>
-                              <span className="text-[10px] bg-amber-200 text-amber-805 px-1.5 py-0.5 rounded font-bold shrink-0">NEW</span>
+                            <div className="flex justify-between items-center gap-2 overflow-hidden">
+                              <span className="font-bold text-[13px] text-gray-900 truncate font-sans">{chat.customerName}</span>
+                              <span className="text-[9px] bg-amber-200 text-amber-805 px-1.5 py-0.5 rounded font-bold shrink-0">NEW</span>
                             </div>
-                            <p className="text-xs text-amber-900 opacity-80 line-clamp-1 mb-1 font-sans">
-                              {last ? last.text : "Новое обращение"}
-                            </p>
-                            <div className="flex items-center justify-between text-[10px] text-gray-400 font-mono mt-1 pt-1 border-t border-amber-100/50">
-                              <span>ID: #{chat.id}</span>
-                              <span>{last ? formatTime(last.createdAt) : formatTime(chat.createdAt)}</span>
+                            <div className="flex items-center justify-between gap-2 text-[10px] text-gray-400 font-mono mt-0.5">
+                              <span className="truncate text-amber-900/70 font-sans">{last ? last.text : "Новое обращение"}</span>
+                              <span className="shrink-0">#{chat.id}</span>
                             </div>
                           </div>
                         );
                       })}
                     </div>
                   )}
+                  {renderPager(reservedPage, reservedPages, setReservedPage)}
                 </div>
 
                 {/* В работе: active */}
-                <div className="p-4">
-                  <h2 className="text-xs font-bold uppercase tracking-widest text-[#9CA3AF] mb-3 font-sans">
+                <div className="p-3">
+                  <h2 className="text-[11px] font-bold uppercase tracking-widest text-[#9CA3AF] mb-2 font-sans">
                     В работе ({activeChats.length})
                   </h2>
 
                   {activeChats.length === 0 ? (
-                    <div className="p-4 text-center rounded-xl bg-gray-50 text-xs text-gray-400 border border-dashed border-gray-200 font-sans">
+                    <div className="p-2.5 text-center rounded-lg bg-gray-50 text-[11px] text-gray-400 border border-dashed border-gray-200 font-sans">
                       Нет активных диалогов
                     </div>
                   ) : (
-                    <div className="space-y-2">
-                      {activeChats.map((chat) => {
+                    <div className="space-y-1.5">
+                      {activePageItems.map((chat) => {
                         const isSelected = selectedChatId === chat.id;
                         const last = chat.messages[chat.messages.length - 1];
                         const isUnread = !!last && last.sender === "customer";
@@ -640,105 +631,44 @@ export default function App() {
                             id={`chat-active-item-${chat.id}`}
                             key={chat.id}
                             onClick={() => selectChat(chat.id)}
-                            className={`p-3 border transition-all duration-200 cursor-pointer rounded-xl ${
+                            className={`p-2 border transition-all duration-200 cursor-pointer rounded-lg ${
                               isSelected
                                 ? "bg-blue-50 border-blue-100 shadow-sm"
                                 : "bg-white border-transparent hover:bg-gray-50"
                             }`}
                           >
-                            <div className="flex justify-between items-start mb-1">
-                              <span className={`text-sm text-gray-900 truncate pr-2 font-sans ${isSelected || isUnread ? "font-bold" : "font-medium"}`}>{chat.customerName}</span>
-                              <span className="text-[10px] text-gray-400 shrink-0 font-mono">{last ? formatTime(last.createdAt) : ""}</span>
-                            </div>
-                            <p className="text-xs text-gray-500 line-clamp-1 mb-1 font-sans">{last ? last.text : "Нет сообщений"}</p>
-                            <div className="flex items-center justify-between gap-2 text-[10px] text-gray-400 font-mono">
-                              <span>ID: #{chat.id}</span>
+                            <div className="flex justify-between items-center gap-2">
+                              <span className={`text-[13px] text-gray-900 truncate font-sans ${isSelected || isUnread ? "font-bold" : "font-medium"}`}>{chat.customerName}</span>
                               {isUnread ? (
-                                <span className="bg-emerald-500 text-white font-sans text-[10px] px-1.5 py-0.5 rounded font-bold shrink-0">
-                                  NEW
-                                </span>
+                                <span className="bg-emerald-500 text-white font-sans text-[9px] px-1.5 py-0.5 rounded font-bold shrink-0">NEW</span>
                               ) : (
-                                <span className="text-gray-400 font-sans text-[10px]">В работе</span>
+                                <span className="text-[10px] text-gray-400 shrink-0 font-mono">{last ? formatTime(last.createdAt) : ""}</span>
                               )}
                             </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-
-                {/* Нераспределённые: pending */}
-                <div className="p-4">
-                  <h2 className="text-xs font-bold uppercase tracking-widest text-[#9CA3AF] mb-3 flex items-center justify-between font-sans">
-                    <span className="flex items-center gap-2">
-                      <span className="w-1.5 h-1.5 rounded-full bg-violet-400"></span>
-                      Нераспределённые ({pendingTotal})
-                    </span>
-                    <button
-                      onClick={() => loadPending(pendingPage, searchQuery)}
-                      title="Обновить очередь"
-                      className="p-1 text-gray-400 hover:text-gray-700 cursor-pointer"
-                    >
-                      <RefreshCw size={12} />
-                    </button>
-                  </h2>
-
-                  {pendingChats.length === 0 ? (
-                    <div className="p-4 text-center rounded-xl bg-gray-50 text-xs text-gray-400 border border-dashed border-gray-200 font-sans">
-                      Очередь пуста
-                    </div>
-                  ) : (
-                    <div className="space-y-2">
-                      {pendingChats.map((chat) => {
-                        const isSelected = selectedChatId === chat.id;
-                        const last = chat.messages[chat.messages.length - 1];
-                        return (
-                          <div
-                            id={`chat-pending-item-${chat.id}`}
-                            key={chat.id}
-                            onClick={() => selectChat(chat.id)}
-                            className={`p-3 border transition-all duration-200 cursor-pointer rounded-xl ${
-                              isSelected
-                                ? "bg-violet-50 border-violet-200 shadow-sm"
-                                : "bg-white border-gray-100 hover:bg-gray-50"
-                            }`}
-                          >
-                            <div className="flex justify-between items-start mb-1">
-                              <span className="text-sm text-gray-900 truncate pr-2 font-sans font-medium">{chat.customerName}</span>
-                              <span className="text-[10px] text-gray-400 shrink-0 font-mono">{formatTime(chat.createdAt)}</span>
-                            </div>
-                            <p className="text-xs text-gray-500 line-clamp-1 mb-2 font-sans">{last ? last.text : "Ожидает оператора"}</p>
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="text-[10px] text-gray-400 font-mono">ID: #{chat.id}</span>
-                              <button
-                                id={`btn-take-${chat.id}`}
-                                onClick={(e) => { e.stopPropagation(); handleTakeChat(chat.id); }}
-                                className="text-[10px] font-bold px-2 py-1 rounded-md bg-violet-600 text-white hover:bg-violet-700 transition-colors cursor-pointer font-sans"
-                              >
-                                Взять
-                              </button>
+                            <div className="flex items-center justify-between gap-2 text-[10px] text-gray-400 font-mono mt-0.5">
+                              <span className="truncate text-gray-500 font-sans">{last ? last.text : "Нет сообщений"}</span>
+                              <span className="shrink-0">#{chat.id}</span>
                             </div>
                           </div>
                         );
                       })}
                     </div>
                   )}
-                  {renderPager(pendingPage, pendingPages, (p) => loadPending(p, searchQuery))}
+                  {renderPager(activePage, activePages, setActivePage)}
                 </div>
 
                 {/* Завершённые: closed */}
-                <div className="p-4">
-                  <h2 className="text-xs font-bold uppercase tracking-widest text-[#9CA3AF] mb-3 font-sans">
+                <div className="p-3">
+                  <h2 className="text-[11px] font-bold uppercase tracking-widest text-[#9CA3AF] mb-2 font-sans">
                     Завершённые ({closedTotal})
                   </h2>
 
                   {closedChats.length === 0 ? (
-                    <div className="p-4 text-center rounded-xl bg-gray-50 text-xs text-gray-400 border border-dashed border-gray-200 font-sans">
+                    <div className="p-2.5 text-center rounded-lg bg-gray-50 text-[11px] text-gray-400 border border-dashed border-gray-200 font-sans">
                       Нет завершённых диалогов
                     </div>
                   ) : (
-                    <div className="space-y-2">
+                    <div className="space-y-1.5">
                       {closedChats.map((chat) => {
                         const isSelected = selectedChatId === chat.id;
                         const last = chat.messages[chat.messages.length - 1];
@@ -747,26 +677,25 @@ export default function App() {
                             id={`chat-closed-item-${chat.id}`}
                             key={chat.id}
                             onClick={() => selectChat(chat.id)}
-                            className={`p-3 border transition-all duration-200 cursor-pointer rounded-xl ${
+                            className={`p-2 border transition-all duration-200 cursor-pointer rounded-lg ${
                               isSelected
                                 ? "bg-gray-100 border-gray-200 shadow-sm"
                                 : "bg-white border-transparent hover:bg-gray-50 opacity-80"
                             }`}
                           >
-                            <div className="flex justify-between items-start mb-1">
-                              <span className="text-sm text-gray-700 truncate pr-2 font-sans font-medium">{chat.customerName}</span>
-                              <span className="text-[10px] text-gray-400 shrink-0 font-mono">{chat.closedAt ? formatTime(chat.closedAt) : ""}</span>
-                            </div>
-                            <p className="text-xs text-gray-500 line-clamp-1 mb-1 font-sans">{last ? last.text : "Завершённый диалог"}</p>
-                            <div className="flex items-center justify-between gap-2 text-[10px] text-gray-400 font-mono">
-                              <span>ID: #{chat.id}</span>
+                            <div className="flex justify-between items-center gap-2">
+                              <span className="text-[13px] text-gray-700 truncate font-sans font-medium">{chat.customerName}</span>
                               {chat.rating ? (
-                                <span className="flex items-center gap-0.5 text-amber-500 font-sans">
+                                <span className="flex items-center gap-0.5 text-amber-500 font-sans text-[10px] shrink-0">
                                   {chat.rating} <Star size={9} className="fill-amber-400 text-amber-400" />
                                 </span>
                               ) : (
-                                <span className="text-gray-400 font-sans text-[10px]">Закрыт</span>
+                                <span className="text-[10px] text-gray-400 shrink-0 font-mono">{chat.closedAt ? formatTime(chat.closedAt) : ""}</span>
                               )}
+                            </div>
+                            <div className="flex items-center justify-between gap-2 text-[10px] text-gray-400 font-mono mt-0.5">
+                              <span className="truncate text-gray-500 font-sans">{last ? last.text : "Завершённый диалог"}</span>
+                              <span className="shrink-0">#{chat.id}</span>
                             </div>
                           </div>
                         );
@@ -821,16 +750,12 @@ export default function App() {
                               ? "bg-emerald-50 text-emerald-700 border border-emerald-150"
                               : currentChat.status === "reserved"
                               ? "bg-amber-50 text-amber-700 animate-pulse border border-amber-150"
-                              : currentChat.status === "pending"
-                              ? "bg-violet-50 text-violet-700 border border-violet-150"
                               : "bg-red-50 text-red-700 border border-red-150"
                           }`}>
                             {currentChat.status === "active"
                               ? "В РАБОТЕ"
                               : currentChat.status === "reserved"
                               ? "РЕЗЕРВ"
-                              : currentChat.status === "pending"
-                              ? "В ОЧЕРЕДИ"
                               : "ЗАКРЫТ"}
                           </span>
                         </div>
@@ -847,7 +772,7 @@ export default function App() {
                         Инфо
                       </button>
 
-                      {currentChat.status !== "closed" && currentChat.status !== "pending" && (
+                      {currentChat.status !== "closed" && (
                         <button
                           id="btn-close-session"
                           onClick={() => handleCloseSession(currentChat.id)}
@@ -934,37 +859,6 @@ export default function App() {
                             Отклонить
                           </button>
                         </div>
-                      </div>
-                    ) : currentChat.status === "pending" ? (
-                      // Просмотр нераспределённого чата
-                      <div className="my-auto max-w-sm w-full mx-auto bg-white p-8 rounded-3xl border border-gray-150 shadow-xl text-center space-y-5">
-                        <div className="h-14 w-14 mx-auto rounded-full bg-violet-50 border border-violet-100 flex items-center justify-center text-violet-500">
-                          <AlertTriangle size={24} />
-                        </div>
-                        <div className="space-y-1">
-                          <h3 className="text-lg font-bold text-gray-900 font-sans tracking-tight">Обращение в очереди</h3>
-                          <p className="text-gray-500 text-xs leading-relaxed font-sans">
-                            Чат ещё не распределён. Возьмите его в работу, чтобы начать диалог.
-                          </p>
-                        </div>
-
-                        {currentChat.messages.length > 0 && (
-                          <div className="max-h-40 overflow-y-auto space-y-2 p-3 bg-gray-50 border border-gray-150 rounded-xl text-left">
-                            {currentChat.messages.map((msg, index) => (
-                              <div key={`${msg.id}-${index}`} className="bg-white border border-gray-150 rounded-xl px-3 py-2 text-xs text-gray-800">
-                                <p className="leading-relaxed whitespace-pre-line font-sans">{msg.text}</p>
-                                <span className="block text-right text-[9px] text-gray-400 font-mono mt-0.5">{formatTime(msg.createdAt)}</span>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-
-                        <button
-                          onClick={() => handleTakeChat(currentChat.id)}
-                          className="w-full py-3 bg-violet-600 hover:bg-violet-700 text-white font-bold rounded-2xl transition-all shadow-md cursor-pointer text-xs font-sans"
-                        >
-                          Взять в работу
-                        </button>
                       </div>
                     ) : (
                       // Лента сообщений (active/closed)

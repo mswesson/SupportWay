@@ -85,37 +85,13 @@ class HistoryResponse(BaseModel):
 
 
 class PendingClientInfo(BaseModel):
-    """Данные клиента в элементе очереди."""
+    """Данные клиента в элементе списка чатов."""
 
     full_name: str
     phone: str | None
     email: str | None
     source: str | None = None
     external_id: str | None = None
-
-
-class PendingChatItem(BaseModel):
-    """Элемент списка ожидающих чатов."""
-
-    chat_id: int
-    client: PendingClientInfo
-    created_at: datetime
-
-
-class PendingChatsResponse(BaseModel):
-    """Ответ эндпоинта GET /chats/pending — очередь ожидающих чатов (постранично)."""
-
-    items: list[PendingChatItem]
-    total: int
-    page: int
-    page_size: int
-
-
-class TakeChatResponse(BaseModel):
-    """Ответ эндпоинта POST /chats/{id}/take."""
-
-    chat_id: int
-    status: str
 
 
 class MyChatItem(BaseModel):

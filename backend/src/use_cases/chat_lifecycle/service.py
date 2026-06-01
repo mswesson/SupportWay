@@ -31,21 +31,18 @@ from src.features.messages.repository import message_repository
 from src.features.operators.repository import operator_presence_repository
 from src.use_cases.chat_lifecycle.schemas import (
     AcceptChatResponse,
+    CloseChatResponse,
     ClosedChatItem,
     ClosedChatsResponse,
-    CloseChatResponse,
     CreateChatRequest,
     CreateChatResponse,
     HistoryMessageItem,
     HistoryResponse,
     MyChatItem,
     MyChatsResponse,
-    PendingChatItem,
-    PendingChatsResponse,
     PendingClientInfo,
     RatingResponse,
     RejectChatResponse,
-    TakeChatResponse,
 )
 
 # Коды справочника статусов чата
@@ -53,10 +50,14 @@ _STATUS_PENDING = 'pending'
 _STATUS_RESERVED = 'reserved'
 _STATUS_ACTIVE = 'active'
 _STATUS_CLOSED = 'closed'
+# Терминальный статус: чат создан без онлайн-операторов (хранится только для истории)
+_STATUS_NO_OPERATOR = 'no_operator'
 
 # Коды справочника типов отправителя
 SENDER_CLIENT = 'client'
 SENDER_OPERATOR = 'operator'
+# Тип инициатора закрытия для системных терминальных переходов
+_CLOSED_BY_SYSTEM = 'system'
 
 
 class ChatLifecycleService:
@@ -123,8 +124,28 @@ class ChatLifecycleService:
         await issue_client_token(self._redis, chat.id, token)
 
         assigned = await self._try_assign(chat.id)
-        status = _STATUS_RESERVED if assigned else 'no_operators_available'
-        return CreateChatResponse(chat_id=chat.id, client_token=token, status=status)
+        if not assigned:
+            # Онлайн-операторов нет: закрываем чат терминальным статусом для истории.
+            await self._mark_no_operator(chat.id)
+            return CreateChatResponse(
+                chat_id=chat.id, client_token=token, status='no_operators_available'
+            )
+        return CreateChatResponse(chat_id=chat.id, client_token=token, status=_STATUS_RESERVED)
+
+    async def _mark_no_operator(self, chat_id: int) -> None:
+        """Переводит чат в терминальный статус no_operator (без оператора, для истории)."""
+        no_operator_id = await self._code_to_id(ChatStatus, _STATUS_NO_OPERATOR)
+        closed_by_id = await self._code_to_id(ClosedByType, _CLOSED_BY_SYSTEM)
+        await chat_session_repository.update(
+            self._session,
+            chat_id,
+            {
+                'operator_id': None,
+                'status_id': no_operator_id,
+                'closed_by_id': closed_by_id,
+                'closed_at': datetime.now(),
+            },
+        )
 
     async def _try_assign(self, chat_id: int) -> bool:
         """Находит наименее загруженного оператора (не из чёрного списка) и резервирует чат."""
@@ -152,27 +173,7 @@ class ChatLifecycleService:
         )
         return True
 
-    # --- Очередь ожидающих чатов (pull-модель) ---
-
-    async def list_pending(
-        self, page: int = 1, page_size: int = 20, search: str | None = None
-    ) -> PendingChatsResponse:
-        """Постранично возвращает очередь чатов в статусе pending (с поиском)."""
-        pending_id = await self._code_to_id(ChatStatus, _STATUS_PENDING)
-        chats, total = await chat_session_repository.list_pending_paginated(
-            self._session, pending_id, offset=(page - 1) * page_size, limit=page_size, search=search
-        )
-        items: list[PendingChatItem] = []
-        for chat in chats:
-            client = await client_repository.get(self._session, chat.client_id)
-            items.append(
-                PendingChatItem(
-                    chat_id=chat.id,
-                    created_at=chat.created_at,
-                    client=self._client_info(client),
-                )
-            )
-        return PendingChatsResponse(items=items, total=total, page=page, page_size=page_size)
+    # --- Списки чатов оператора ---
 
     async def list_my_chats(self, operator_id: int) -> MyChatsResponse:
         """Возвращает чаты оператора в статусах reserved и active."""
@@ -224,30 +225,6 @@ class ChatLifecycleService:
             )
         return ClosedChatsResponse(items=items, total=total, page=page, page_size=page_size)
 
-    async def take_chat(self, chat_id: int, operator_id: int) -> TakeChatResponse:
-        """Оператор сам берёт ожидающий чат из очереди — чат резервируется за ним."""
-        chat = await self._get_chat_or_raise(chat_id)
-        pending_id = await self._code_to_id(ChatStatus, _STATUS_PENDING)
-        if chat.status_id != pending_id:
-            raise InvalidChatStateError('Чат уже не в очереди (не pending)')
-
-        status = await operator_presence_repository.get_status(self._redis, operator_id)
-        if status != 'online':
-            raise InvalidChatStateError('Оператор не в сети')
-
-        reserved_id = await self._code_to_id(ChatStatus, _STATUS_RESERVED)
-        await chat_session_repository.update(
-            self._session, chat_id, {'operator_id': operator_id, 'status_id': reserved_id}
-        )
-
-        client = await client_repository.get(self._session, chat.client_id)
-        await ws_manager.send_to_operator(
-            operator_id,
-            'chat_assigned',
-            {'chat_id': chat_id, 'client': self._client_event(client)},
-        )
-        return TakeChatResponse(chat_id=chat_id, status=_STATUS_RESERVED)
-
     # --- Принятие чата оператором ---
 
     async def accept_chat(self, chat_id: int, operator_id: int) -> AcceptChatResponse:
@@ -271,7 +248,11 @@ class ChatLifecycleService:
     # --- Отклонение чата оператором ---
 
     async def reject_chat(self, chat_id: int, operator_id: int) -> RejectChatResponse:
-        """Возвращает чат в очередь, добавляет оператора в чёрный список и переназначает."""
+        """Снимает оператора, добавляет его в чёрный список и переназначает чат.
+
+        Если другого онлайн-оператора нет — чат закрывается терминальным статусом
+        no_operator (для истории), а чёрный список чата очищается.
+        """
         chat = await self._get_chat_or_raise(chat_id)
         reserved_id = await self._code_to_id(ChatStatus, _STATUS_RESERVED)
         if chat.status_id != reserved_id:
@@ -280,14 +261,16 @@ class ChatLifecycleService:
             raise AuthorizationError('Чат зарезервирован за другим оператором')
 
         await operator_presence_repository.add_rejected(self._redis, chat_id, operator_id)
-        pending_id = await self._code_to_id(ChatStatus, _STATUS_PENDING)
-        await chat_session_repository.update(
-            self._session, chat_id, {'operator_id': None, 'status_id': pending_id}
-        )
+        # Снимаем оператора перед попыткой переназначения.
+        await chat_session_repository.update(self._session, chat_id, {'operator_id': None})
 
         assigned = await self._try_assign(chat_id)
-        status = _STATUS_RESERVED if assigned else _STATUS_PENDING
-        return RejectChatResponse(chat_id=chat_id, status=status)
+        if assigned:
+            return RejectChatResponse(chat_id=chat_id, status=_STATUS_RESERVED)
+
+        await self._mark_no_operator(chat_id)
+        await operator_presence_repository.clear_rejected(self._redis, chat_id)
+        return RejectChatResponse(chat_id=chat_id, status=_STATUS_NO_OPERATOR)
 
     # --- Закрытие чата ---
 
@@ -346,13 +329,14 @@ class ChatLifecycleService:
     ) -> None:
         """Пишет сообщение в БД и рассылает new_message обеим сторонам.
 
-        Закрытый чат недоступен никому. Оператор может писать только в active
-        (сначала «Принять»). Клиент может писать уже в pending/reserved/active —
-        так оператор после принятия видит контекст, а не пустое окно.
+        Терминальные чаты (closed / no_operator) недоступны никому. Оператор может
+        писать только в active (сначала «Принять»). Клиент может писать уже в
+        pending/reserved/active — так оператор после принятия видит контекст.
         """
         chat = await self._get_chat_or_raise(chat_id)
         closed_id = await self._code_to_id(ChatStatus, _STATUS_CLOSED)
-        if chat.status_id == closed_id:
+        no_operator_id = await self._code_to_id(ChatStatus, _STATUS_NO_OPERATOR)
+        if chat.status_id in (closed_id, no_operator_id):
             raise InvalidChatStateError('Чат закрыт')
         if sender == SENDER_OPERATOR:
             active_id = await self._code_to_id(ChatStatus, _STATUS_ACTIVE)
