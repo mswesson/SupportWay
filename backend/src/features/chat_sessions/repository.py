@@ -36,39 +36,6 @@ class ChatSessionRepository(BaseCrudRepository[ChatSession]):
         )
         return list(result.scalars().all())
 
-    async def list_pending_paginated(
-        self,
-        session: AsyncSession,
-        status_id: int,
-        offset: int,
-        limit: int,
-        search: str | None = None,
-    ) -> tuple[list[ChatSession], int]:
-        """Постранично возвращает очередь pending-чатов и общее количество (с поиском)."""
-        rows = (
-            select(ChatSession)
-            .join(Client, Client.id == ChatSession.client_id)
-            .where(ChatSession.status_id == status_id)
-        )
-        count = (
-            select(func.count())
-            .select_from(ChatSession)
-            .join(Client, Client.id == ChatSession.client_id)
-            .where(ChatSession.status_id == status_id)
-        )
-        if search:
-            cond = _search_condition(search)
-            rows = rows.where(cond)
-            count = count.where(cond)
-
-        total = (await session.execute(count)).scalar_one()
-        records = (
-            await session.execute(
-                rows.order_by(ChatSession.created_at.asc()).offset(offset).limit(limit)
-            )
-        ).scalars().all()
-        return list(records), total
-
     async def list_closed_paginated(
         self,
         session: AsyncSession,

@@ -41,19 +41,6 @@ interface ClosedChatsResponse {
   page_size: number;
 }
 
-interface PendingChatItem {
-  chat_id: number;
-  client: ClientInfo;
-  created_at: string;
-}
-
-interface PendingChatsResponse {
-  items: PendingChatItem[];
-  total: number;
-  page: number;
-  page_size: number;
-}
-
 /** Страница чатов: элементы + метаданные пагинации. */
 export interface PagedChats {
   items: ChatSession[];
@@ -62,7 +49,7 @@ export interface PagedChats {
   pageSize: number;
 }
 
-export const PAGE_SIZE = 20;
+export const PAGE_SIZE = 10;
 
 interface HistoryMessageItem {
   id: number;
@@ -143,25 +130,6 @@ export function mapAssignedChat(
   };
 }
 
-/** Маппинг элемента /chats/pending -> ChatSession (без сообщений). */
-function mapPendingChat(item: PendingChatItem): ChatSession {
-  return {
-    id: item.chat_id,
-    customerName: item.client.full_name ?? '',
-    customerPhone: item.client.phone,
-    customerEmail: item.client.email,
-    source: item.client.source,
-    externalId: item.client.external_id,
-    status: 'pending',
-    operatorId: null,
-    createdAt: item.created_at,
-    acceptedAt: null,
-    closedAt: null,
-    messages: [],
-    rating: null,
-  };
-}
-
 /** Маппинг сообщения истории -> ChatMessage. */
 function mapHistoryMessage(
   m: HistoryMessageItem,
@@ -203,22 +171,6 @@ export async function listClosed(
     page: data.page,
     pageSize: data.page_size,
   };
-}
-
-/** Очередь нераспределённых чатов (postранично, с поиском). */
-export async function listPending(page = 1, search = ''): Promise<PagedChats> {
-  const data = await apiFetch<PendingChatsResponse>(`/chats/pending?${pageQuery(page, search)}`);
-  return {
-    items: data.items.map(mapPendingChat),
-    total: data.total,
-    page: data.page,
-    pageSize: data.page_size,
-  };
-}
-
-/** Оператор берёт нераспределённый чат в работу (резервирует за собой). */
-export async function takeChat(chatId: number): Promise<void> {
-  await apiFetch(`/chats/${chatId}/take`, { method: 'POST' });
 }
 
 /** История сообщений чата. */

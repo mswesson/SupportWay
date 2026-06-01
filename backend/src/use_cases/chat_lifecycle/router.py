@@ -29,18 +29,16 @@ from src.core.security import (
 from src.core.ws_manager import ws_manager
 from src.use_cases.chat_lifecycle.schemas import (
     AcceptChatResponse,
-    ClosedChatsResponse,
     CloseChatRequest,
     CloseChatResponse,
+    ClosedChatsResponse,
     CreateChatRequest,
     CreateChatResponse,
     HistoryResponse,
     MyChatsResponse,
-    PendingChatsResponse,
     RatingRequest,
     RatingResponse,
     RejectChatResponse,
-    TakeChatResponse,
 )
 from src.use_cases.chat_lifecycle.service import (
     SENDER_CLIENT,
@@ -75,18 +73,6 @@ async def create_chat(
     return await service.create_chat(payload)
 
 
-@router.get('/pending', response_model=PendingChatsResponse, tags=[_TAG_OPERATOR])
-async def list_pending(
-    page: int = Query(1, ge=1, description='Номер страницы'),
-    page_size: int = Query(20, ge=1, le=100, description='Записей на странице'),
-    search: str | None = Query(None, description='Поиск по имени клиента или id чата'),
-    current: CurrentOperator = Depends(get_current_operator),
-    service: ChatLifecycleService = Depends(get_chat_lifecycle_service),
-) -> PendingChatsResponse:
-    """Возвращает очередь ожидающих чатов (pending), постранично, с поиском."""
-    return await service.list_pending(page=page, page_size=page_size, search=search)
-
-
 @router.get('/my', response_model=MyChatsResponse, tags=[_TAG_OPERATOR])
 async def list_my_chats(
     current: CurrentOperator = Depends(get_current_operator),
@@ -108,16 +94,6 @@ async def list_closed(
     return await service.list_closed_chats(
         current.id, page=page, page_size=page_size, search=search
     )
-
-
-@router.post('/{chat_id}/take', response_model=TakeChatResponse, tags=[_TAG_OPERATOR])
-async def take_chat(
-    chat_id: int,
-    current: CurrentOperator = Depends(get_current_operator),
-    service: ChatLifecycleService = Depends(get_chat_lifecycle_service),
-) -> TakeChatResponse:
-    """Оператор сам берёт ожидающий чат из очереди — чат резервируется за ним."""
-    return await service.take_chat(chat_id, operator_id=current.id)
 
 
 @router.post('/{chat_id}/accept', response_model=AcceptChatResponse, tags=[_TAG_OPERATOR])
