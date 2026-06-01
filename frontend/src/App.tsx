@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import {
   Phone, Mail, Info, X, RefreshCw, WifiOff, CheckCheck,
-  Paperclip, Smile, AlertTriangle, Star, Eye, EyeOff, SendHorizontal,
+  Smile, AlertTriangle, Star, Eye, EyeOff, SendHorizontal,
   Mail as MailIcon, Volume2, VolumeX, ChevronLeft, ChevronRight
 } from "lucide-react";
 import { ChatSession, Operator, SenderRole } from "./types";
@@ -20,6 +20,37 @@ import { playNotificationBeep } from "./util/sound";
 // Ключи localStorage
 const FULL_NAME_KEY = "support_full_name";
 const SOUND_MUTED_KEY = "support_sound_muted";
+
+// Набор эмодзи для быстрой вставки в поле ответа оператора
+const EMOJI_LIST = [
+  "😀", "😅", "😊", "😉", "🙂", "😍", "🤔", "😐",
+  "😎", "🙏", "👍", "👎", "👌", "🙌", "👏", "🤝",
+  "❤️", "🔥", "✨", "🎉", "✅", "❌", "⚠️", "💡",
+  "📌", "📎", "⏰", "💬", "📞", "📧", "🚀", "💯",
+];
+
+/**
+ * Логотип бренда: векторная стилизованная буква «S»
+ * в скруглённом квадрате с сине-фиолетовым градиентом.
+ */
+const BrandLogo = ({ className = "w-8 h-8" }: { className?: string }) => (
+  <svg viewBox="0 0 32 32" className={className} fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <defs>
+      <linearGradient id="brand-logo-gradient" x1="0" y1="0" x2="32" y2="32" gradientUnits="userSpaceOnUse">
+        <stop stopColor="#3B82F6" />
+        <stop offset="1" stopColor="#6366F1" />
+      </linearGradient>
+    </defs>
+    <rect width="32" height="32" rx="9" fill="url(#brand-logo-gradient)" />
+    <path
+      d="M21 11.2C20.1 9.6 18.1 8.8 16 8.8C13.2 8.8 11.2 10 11.2 12.3C11.2 16.4 21 14.6 21 18.9C21 21.4 18.7 23.2 16 23.2C13.6 23.2 11.6 22.2 10.8 20.4"
+      stroke="white"
+      strokeWidth="2.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
 
 export default function App() {
   // Авторизация
@@ -45,6 +76,7 @@ export default function App() {
   // UI
   const [messageInput, setMessageInput] = useState<string>("");
   const [isClientInfoOpen, setIsClientInfoOpen] = useState<boolean>(false);
+  const [isEmojiOpen, setIsEmojiOpen] = useState<boolean>(false);
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [soundMuted, setSoundMuted] = useState<boolean>(
@@ -383,14 +415,14 @@ export default function App() {
           <div className="absolute top-[-20%] right-[-10%] w-[50vw] h-[50vw] rounded-full bg-blue-500/5 blur-3xl -z-10"></div>
           <div className="absolute bottom-[-20%] left-[-10%] w-[40vw] h-[40vw] rounded-full bg-emerald-500/5 blur-3xl -z-10"></div>
 
-          <div id="login-container" className="grid grid-cols-1 md:grid-cols-12 max-w-4xl w-full bg-white rounded-2xl shadow-xl overflow-hidden min-h-[500px] border border-gray-150">
+          <div id="login-container" className="grid grid-cols-1 md:grid-cols-12 max-w-4xl w-full bg-white rounded-2xl shadow-2xl ring-1 ring-black/5 overflow-hidden min-h-[500px]">
             {/* Брендинг */}
             <div className="md:col-span-5 bg-[#111827] text-white p-10 flex flex-col justify-between relative overflow-hidden">
               <div className="absolute top-0 right-0 w-[200px] h-[200px] bg-blue-500/10 rounded-full blur-2xl"></div>
 
-              <div className="flex items-center gap-2 relative z-10">
-                <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold text-lg font-sans">S</div>
-                <span className="font-semibold text-lg tracking-tight">SupportWay</span>
+              <div className="flex items-center gap-2.5 relative z-10">
+                <BrandLogo className="w-9 h-9" />
+                <span className="font-display font-bold text-xl tracking-tight">SupportWay</span>
               </div>
 
               <div className="my-auto space-y-6 relative z-10 py-6">
@@ -451,7 +483,7 @@ export default function App() {
                       type="text"
                       value={loginUser}
                       onChange={(e) => setLoginUser(e.target.value)}
-                      className="w-full px-4 py-2.5 bg-gray-50 border border-gray-250 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 transition-all text-sm text-gray-900"
+                      className="w-full px-4 py-2.5 bg-gray-100 shadow-inner rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 focus:bg-white transition-all text-sm text-gray-900"
                       placeholder="Иван Иванов"
                     />
                   </div>
@@ -464,7 +496,7 @@ export default function App() {
                         type={showPassword ? "text" : "password"}
                         value={loginPassword}
                         onChange={(e) => setLoginPassword(e.target.value)}
-                        className="w-full px-4 py-2.5 bg-gray-50 border border-gray-250 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 transition-all text-sm text-gray-900"
+                        className="w-full px-4 py-2.5 bg-gray-100 shadow-inner rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 focus:bg-white transition-all text-sm text-gray-900"
                         placeholder="••••••••"
                       />
                       <button
@@ -500,10 +532,10 @@ export default function App() {
         <div className="flex-1 flex flex-col overflow-hidden bg-[#F9FAFB]">
 
           {/* Шапка */}
-          <header className="flex items-center justify-between px-6 py-4 bg-white border-b border-gray-200 shrink-0 select-none">
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold text-lg font-sans">S</div>
-              <h1 className="text-lg font-semibold tracking-tight text-gray-900 underline underline-offset-4 decoration-blue-500/30">SupportWay</h1>
+          <header className="flex items-center justify-between px-6 py-4 bg-white border-b border-gray-100 shrink-0 select-none">
+            <div className="flex items-center gap-2.5">
+              <BrandLogo className="w-9 h-9" />
+              <h1 className="text-xl font-display font-bold tracking-tight text-gray-900">SupportWay</h1>
             </div>
 
             <div className="flex items-center gap-3">
@@ -554,7 +586,7 @@ export default function App() {
           {/* Контент */}
           <main className="flex flex-1 overflow-hidden">
             {/* Левая панель: список чатов */}
-            <aside id="left-sidebar-operator" className="w-80 bg-white border-r border-gray-200 flex flex-col shrink-0">
+            <aside id="left-sidebar-operator" className="w-80 bg-white border-r border-gray-100 flex flex-col shrink-0">
               <div className="p-4 border-b border-gray-100 bg-white">
                 <div className="relative">
                   <input
@@ -562,7 +594,7 @@ export default function App() {
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     placeholder="Поиск по имени или #id..."
-                    className="w-full pl-9 pr-4 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 text-gray-900 placeholder-gray-400 font-sans"
+                    className="w-full pl-9 pr-4 py-2 bg-gray-100 shadow-inner rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:bg-white transition-all text-gray-900 placeholder-gray-400 font-sans"
                   />
                   <span className="absolute left-3 top-2.5 text-sm opacity-40">🔍</span>
                 </div>
@@ -707,7 +739,7 @@ export default function App() {
 
               </div>
 
-              <div className="p-4 bg-gray-50 border-t border-gray-200 text-xs text-gray-500 flex items-center justify-between font-mono shrink-0 select-none">
+              <div className="p-4 bg-gray-50 border-t border-gray-100 text-xs text-gray-500 flex items-center justify-between font-mono shrink-0 select-none">
                 <span className="flex items-center gap-1.5">
                   <span className="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
                   Всего: {totalCount} чатов
@@ -734,7 +766,7 @@ export default function App() {
               {currentChat ? (
                 <>
                   {/* Шапка чата */}
-                  <div id="chat-session-header" className="px-6 py-4 border-b border-gray-150 flex items-center justify-between bg-white z-10 shadow-xs shrink-0 select-none">
+                  <div id="chat-session-header" className="px-6 py-4 flex items-center justify-between bg-white z-10 shadow-xs shrink-0 select-none">
                     <div className="flex items-center gap-3">
                       <div className="w-10 h-10 rounded-xl bg-blue-50 border border-blue-100 flex items-center justify-center font-bold text-blue-600 font-sans text-sm tracking-tight select-none shrink-0">
                         {currentChat.customerName.substring(0, 1).toUpperCase()}
@@ -766,7 +798,7 @@ export default function App() {
                       <button
                         id="btn-customer-info"
                         onClick={() => setIsClientInfoOpen(true)}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-gray-50 hover:bg-gray-100 text-xs font-semibold text-gray-700 rounded-lg border border-gray-205 transition-colors cursor-pointer font-sans"
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-gray-50 hover:bg-gray-100 text-xs font-semibold text-gray-700 rounded-lg border border-gray-100 transition-colors cursor-pointer font-sans"
                       >
                         <Info size={13} />
                         Инфо
@@ -798,7 +830,7 @@ export default function App() {
 
                     {currentChat.status === "reserved" ? (
                       // Экран приёма зарезервированного чата
-                      <div id="reserved-action-overlay" className="my-auto max-w-md w-full mx-auto bg-white p-8 rounded-3xl border border-gray-150 shadow-xl space-y-6">
+                      <div id="reserved-action-overlay" className="my-auto max-w-md w-full mx-auto bg-white p-8 rounded-3xl shadow-xl space-y-6">
                         <div className="text-center space-y-3">
                           <div className="h-14 w-14 mx-auto rounded-full bg-amber-50 border border-amber-100 flex items-center justify-center text-amber-500 animate-pulse">
                             <AlertTriangle size={24} />
@@ -812,7 +844,7 @@ export default function App() {
                         </div>
 
                         {/* Контакты клиента */}
-                        <div className="p-4 rounded-xl bg-gray-55 border border-gray-150 text-left space-y-2.5 text-xs">
+                        <div className="p-4 rounded-xl bg-gray-50 text-left space-y-2.5 text-xs">
                           <div className="grid grid-cols-2 gap-2">
                             <div>
                               <span className="text-gray-400 block text-[9px] uppercase font-bold font-mono">Почта</span>
@@ -829,10 +861,10 @@ export default function App() {
                         {currentChat.messages.length > 0 && (
                           <div className="space-y-2">
                             <div className="text-[10px] text-gray-400 font-bold uppercase tracking-wider font-mono">Сообщения клиента</div>
-                            <div className="max-h-48 overflow-y-auto space-y-2 p-3 bg-gray-50 border border-gray-150 rounded-xl">
+                            <div className="max-h-48 overflow-y-auto space-y-2 p-3 bg-gray-50 rounded-xl">
                               {currentChat.messages.map((msg, index) => (
                                 <div key={`${msg.id}-${index}`} className="flex flex-col items-start">
-                                  <div className="bg-white border border-gray-150 rounded-2xl rounded-bl-none px-3 py-2 text-xs text-gray-800 max-w-[85%] shadow-xs">
+                                  <div className="bg-white rounded-2xl rounded-bl-none px-3 py-2 text-xs text-gray-800 max-w-[85%] shadow-sm">
                                     <p className="leading-relaxed whitespace-pre-line font-sans">{msg.text}</p>
                                     <span className="block text-right text-[9px] text-gray-400 font-mono mt-0.5">{formatTime(msg.createdAt)}</span>
                                   </div>
@@ -854,7 +886,7 @@ export default function App() {
                           <button
                             id="btn-reserved-reject"
                             onClick={() => handleRejectChat(currentChat.id)}
-                            className="w-full py-2.5 bg-white border border-gray-250 hover:bg-gray-50 text-gray-500 font-semibold rounded-2xl transition-all cursor-pointer text-xs font-sans"
+                            className="w-full py-2.5 bg-white border border-gray-100 hover:bg-gray-50 text-gray-500 font-semibold rounded-2xl transition-all cursor-pointer text-xs font-sans"
                           >
                             Отклонить
                           </button>
@@ -874,7 +906,7 @@ export default function App() {
                             if (msg.sender === "system") {
                               return (
                                 <div key={`${msg.id}-${index}`} className="flex items-center justify-center p-2 text-center">
-                                  <span className="bg-gray-100 text-gray-500 rounded-lg px-3 py-1 text-xs max-w-md italic border border-gray-200">
+                                  <span className="bg-gray-100 text-gray-500 rounded-lg px-3 py-1 text-xs max-w-md italic">
                                     {msg.text}
                                   </span>
                                 </div>
@@ -893,10 +925,10 @@ export default function App() {
                                       {currentChat.customerName.substring(0, 1).toUpperCase()}
                                     </div>
                                   )}
-                                  <div className={`relative px-4 py-2.5 rounded-2xl shadow-xs text-sm ${
+                                  <div className={`relative px-4 py-2.5 rounded-2xl shadow-sm text-sm ${
                                     isOp
-                                      ? "bg-blue-50/50 text-gray-950 rounded-br-none border border-blue-100/70"
-                                      : "bg-white text-gray-950 rounded-bl-none border border-gray-150"
+                                      ? "bg-blue-50/50 text-gray-950 rounded-br-none"
+                                      : "bg-white text-gray-950 rounded-bl-none"
                                   }`}>
                                     <p className="leading-relaxed whitespace-pre-line font-sans">{msg.text}</p>
 
@@ -926,32 +958,55 @@ export default function App() {
                     <form
                       id="form-send-message"
                       onSubmit={handleSendMessage}
-                      className="p-4 border-t border-gray-150 bg-white flex items-center gap-3 shrink-0"
+                      className="p-4 bg-white flex items-center gap-3 shrink-0 shadow-[0_-1px_3px_rgba(0,0,0,0.03)]"
                     >
-                      <button
-                        type="button"
-                        className="p-2 text-gray-400 hover:text-gray-900 hover:bg-gray-50 rounded-lg transition-colors cursor-pointer"
-                        title="Приложить файл"
-                      >
-                        <Paperclip size={16} />
-                      </button>
-
                       <input
                         id="input-chat-textbox"
                         type="text"
                         value={messageInput}
                         onChange={(e) => setMessageInput(e.target.value)}
                         placeholder="Напишите ответ клиенту..."
-                        className="flex-1 bg-gray-50 border border-gray-200 rounded-xl px-4 py-2 text-xs leading-normal text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all font-sans"
+                        className="flex-1 bg-gray-100 shadow-inner rounded-xl px-4 py-2 text-xs leading-normal text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:bg-white transition-all font-sans"
                       />
 
-                      <button
-                        type="button"
-                        className="p-2 text-gray-400 hover:text-gray-900 hover:bg-gray-50 rounded-lg transition-colors cursor-pointer"
-                        title="Выбрать эмодзи"
-                      >
-                        <Smile size={16} />
-                      </button>
+                      <div className="relative shrink-0">
+                        {isEmojiOpen && (
+                          <>
+                            {/* Невидимый слой для закрытия по клику вне */}
+                            <div
+                              className="fixed inset-0 z-40"
+                              onClick={() => setIsEmojiOpen(false)}
+                            />
+                            <div
+                              id="emoji-picker"
+                              className="absolute bottom-full right-0 mb-2 z-50 w-64 p-2 bg-white rounded-xl shadow-xl ring-1 ring-black/5 grid grid-cols-8 gap-0.5"
+                            >
+                              {EMOJI_LIST.map((emoji) => (
+                                <button
+                                  key={emoji}
+                                  type="button"
+                                  onClick={() => setMessageInput((prev) => prev + emoji)}
+                                  className="text-lg leading-none p-1 rounded-lg hover:bg-gray-100 transition-colors cursor-pointer"
+                                >
+                                  {emoji}
+                                </button>
+                              ))}
+                            </div>
+                          </>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => setIsEmojiOpen((v) => !v)}
+                          className={`p-2 rounded-lg transition-colors cursor-pointer ${
+                            isEmojiOpen
+                              ? "text-blue-600 bg-blue-50"
+                              : "text-gray-400 hover:text-gray-900 hover:bg-gray-50"
+                          }`}
+                          title="Выбрать эмодзи"
+                        >
+                          <Smile size={16} />
+                        </button>
+                      </div>
 
                       <button
                         id="btn-send-message"
@@ -967,7 +1022,7 @@ export default function App() {
                       </button>
                     </form>
                   ) : currentChat.status === "closed" ? (
-                    <div id="closed-feedback-section" className="p-6 bg-[#FAFBFD] border-t border-gray-150 text-center space-y-3.5 shrink-0">
+                    <div id="closed-feedback-section" className="p-6 bg-[#FAFBFD] text-center space-y-3.5 shrink-0 shadow-[0_-1px_3px_rgba(0,0,0,0.03)]">
                       <div className="text-gray-500 text-xs font-medium font-sans">Сессия обслуживания завершена.</div>
 
                       {currentChat.rating ? (
@@ -990,7 +1045,7 @@ export default function App() {
                 </>
               ) : (
                 <div className="flex-1 flex flex-col items-center justify-center p-8 bg-[#F9FAFB] text-center space-y-3 select-none">
-                  <div className="h-12 w-12 rounded-2xl bg-gray-50 border border-gray-150 flex items-center justify-center text-gray-400">
+                  <div className="h-12 w-12 rounded-2xl bg-gray-50 border border-gray-100 flex items-center justify-center text-gray-400">
                     <MailIcon size={20} />
                   </div>
                   <h3 className="text-sm font-bold text-gray-900 font-sans">Выберите диалог</h3>
@@ -1039,7 +1094,7 @@ export default function App() {
                           className={`text-[10px] font-bold px-2 py-1 rounded transition-all cursor-pointer ${
                             copiedField === "phone"
                               ? "bg-green-100 text-green-700"
-                              : "bg-white hover:bg-gray-100 text-indigo-600 border border-gray-200 shadow-sm"
+                              : "bg-white hover:bg-gray-100 text-indigo-600 border border-gray-100 shadow-sm"
                           }`}
                         >
                           {copiedField === "phone" ? "Скопировано!" : "Копировать"}
@@ -1061,7 +1116,7 @@ export default function App() {
                           className={`text-[10px] font-bold px-2 py-1 rounded transition-all cursor-pointer ${
                             copiedField === "email"
                               ? "bg-green-100 text-green-700"
-                              : "bg-white hover:bg-gray-100 text-indigo-600 border border-gray-200 shadow-sm"
+                              : "bg-white hover:bg-gray-100 text-indigo-600 border border-gray-100 shadow-sm"
                           }`}
                         >
                           {copiedField === "email" ? "Скопировано!" : "Копировать"}
