@@ -1,0 +1,6 @@
+{
+  "name": "Support Chat Aggregator",
+  "description": "Панель оператора технической поддержки для распределения и ведения чатов клиентов с интеграцией ИИ-симулятора",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

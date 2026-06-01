@@ -1,0 +1,63 @@
+x-common-env: &common-env
+  SUPPORT_SERVICE_VERSION: 1.0.0
+
+  SUPPORT_DATABASE_USER: support
+  SUPPORT_DATABASE_PASSWORD: support
+  SUPPORT_DATABASE_HOST: postgres
+  SUPPORT_DATABASE_PORT: 5432
+  SUPPORT_DATABASE_NAME: support
+
+  SUPPORT_REDIS_URL: redis://redis:6379/0
+
+  SUPPORT_JWT_SECRET: dev-secret-change-me
+  # SUPPORT_INTEGRATION_API_KEY: dev-integration-key   # включить, если нужна защита создания чата
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: support
+      POSTGRES_PASSWORD: support
+      POSTGRES_DB: support
+    ports:
+      - 5432:5432
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U support']
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - 6379:6379
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  migrations:
+    build: .
+    command: alembic upgrade head
+    environment: *common-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  support:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    ports:
+      - 8080:8080
+    environment:
+      <<: *common-env
+      # Несколько воркеров: рассылка WS-эвентов идёт через Redis Pub/Sub.
+      NUM_OF_WORKERS: '2'
